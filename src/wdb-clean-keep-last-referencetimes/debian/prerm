@@ -18,10 +18,10 @@ set -e
 
 
 case "$1" in
-    remove|upgrade|deconfigure)
+    remove)
+    	su wdb -c "/usr/lib/wdb/wdb-clean-keep-last-referencetimes uninstall"
     ;;
-
-    failed-upgrade)
+	upgrade|deconfigure|failed-upgrade)
     ;;
 
     *)
