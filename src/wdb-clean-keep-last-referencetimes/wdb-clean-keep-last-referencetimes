@@ -4,7 +4,6 @@ import argparse
 import subprocess
 import sys
 from io import StringIO
-from IPython.utils.io import stderr
 
 
 install_sql = '''
@@ -111,9 +110,13 @@ def _get_psql_invocation(args, detect_errors=True):
         ret += ['-U', args.user]
     return ret
 
-def _run_sql_command(cmd, args):
+def _run_sql_command(cmd, args, print_errors=True):
     cmd = _get_psql_invocation(args) + ['-c', cmd]
-    return subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, bufsize=1)
+    proc.wait()
+    if print_errors and proc.returncode != 0:
+        print(proc.stderr.read(), file=sys.stderr)
+    return proc
 
 def install(args):
     return _run_sql_command(install_sql, args).returncode
@@ -126,10 +129,11 @@ def purge(args):
     return _run_sql_command('drop function clean.remove_old_referencetimes()', args).returncode
 
 def test(args):
-    result = _run_sql_command(test_sql, args)
-    failed = 'ERROR' in result.stderr
+    result = _run_sql_command(test_sql, args, print_errors=False)
+    messages = result.stderr.read()
+    failed = 'ERROR' in messages or 'FATAL' in messages
     if failed:
-        print(result.stderr)
+        print(messages, file=sys.stderr)
     return failed
 
 
@@ -141,7 +145,7 @@ if __name__ == '__main__':
                'test': test}
     
     parser = argparse.ArgumentParser(conflict_handler='resolve')
-    parser.add_argument('-d', '--database', help='Database name')
+    parser.add_argument('-d', '--database', default='wdb', help='Database name')
     parser.add_argument('-h', '--host', help='Database host')
     parser.add_argument('-p', '--port', help='Database port')
     parser.add_argument('-U', '--user', help='Database user')
