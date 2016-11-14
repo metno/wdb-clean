@@ -1,0 +1,158 @@
+#!/usr/bin/python3
+
+import argparse
+import subprocess
+import sys
+from io import StringIO
+from IPython.utils.io import stderr
+
+
+install_sql = '''
+BEGIN;
+
+CREATE OR REPLACE FUNCTION clean.remove_old_referencetimes()
+RETURNS void AS
+$BODY$
+DECLARE
+    dataprovider text;
+    dataprovider_array text[1];
+    oldest_to_keep timestamp with time zone;
+BEGIN
+    FOR dataprovider IN SELECT dataprovidername FROM wci.browse(NULL::wci.browsedataprovider) LOOP
+        dataprovider_array[1] = dataprovider;
+        
+        SELECT 
+            min(r.referencetime) INTO oldest_to_keep 
+        FROM (
+            SELECT 
+                referencetime 
+            FROM 
+                wci.browse(
+                    dataprovider_array,
+                    NULL,NULL,NULL,NULL,NULL,NULL,
+                    NULL::wci.browsereferencetime) 
+            ORDER BY 1 DESC LIMIT 2) AS r;
+            
+        PERFORM wci.remove(
+            dataprovider_array,NULL, 
+            'before '||oldest_to_keep,
+            NULL, NULL,NULL, NULL);
+    END LOOP;
+END;
+$BODY$
+LANGUAGE plpgsql;
+
+INSERT INTO clean.strategies (function) VALUES ('remove_old_referencetimes');
+
+END;
+'''
+
+test_sql = '''
+BEGIN;
+
+CREATE OR REPLACE FUNCTION
+assert_result_count(dataprovider text[], referencetime text, expected int, message text)
+RETURNS void AS
+$BODY$
+DECLARE
+    rows int;
+BEGIN
+    SELECT count(*) INTO rows FROM wci.read(dataprovider,NULL, referencetime,NULL, NULL,NULL, NULL,NULL::wci.returngid);
+    IF rows != expected THEN
+        RAISE EXCEPTION 'Fond % rows, expected %: %', rows, expected, message;
+    END IF;
+END;
+$BODY$
+LANGUAGE plpgsql;
+
+SELECT wci.begin('wdb', 999,999,999);
+select wci.adddataprovider('testwriter1', 'computer system', 'grid', '1 hour', '');
+select wci.adddataprovider('testwriter2', 'computer system', 'grid', '1 hour', '');
+select wci.adddataprovider('testwriter3', 'computer system', 'grid', '1 hour', '');
+
+SELECT wci.write('aaaabbbbccccdddd'::bytea, 'testwriter1', 'test grid, rotated', 'today 00:00:00', 'today', 'today', 'air temperature', 'height above ground', 2, 2,0,0);
+SELECT wci.write('aaaabbbbccccdddd'::bytea, 'testwriter1', 'test grid, rotated', 'today 00:01:00', 'today', 'today', 'air temperature', 'height above ground', 2, 2,0,0);
+SELECT wci.write('aaaabbbbccccdddd'::bytea, 'testwriter1', 'test grid, rotated', 'today 00:02:00', 'today', 'today', 'air temperature', 'height above ground', 2, 2,0,0);
+SELECT wci.write('aaaabbbbccccdddd'::bytea, 'testwriter2', 'test grid, rotated', 'today 00:00:00', 'today', 'today', 'air temperature', 'height above ground', 2, 2,0,0);
+SELECT wci.write('aaaabbbbccccdddd'::bytea, 'testwriter3', 'test grid, rotated', 'today 00:00:00', 'today', 'today', 'air temperature', 'height above ground', 2, 2,0,0);
+SELECT wci.write('aaaabbbbccccdddd'::bytea, 'testwriter3', 'test grid, rotated', 'today 00:01:00', 'today', 'today', 'air temperature', 'height above ground', 2, 2,0,0);
+
+SAVEPOINT setup_complete;
+
+SELECT cleanupdb();
+SELECT assert_result_count('{testwriter1}', NULL, 2, 'Wrong number of grid rows left after clean - for testwriter1');
+SELECT assert_result_count('{testwriter2}', NULL, 1, 'Wrong number of grid rows left after clean - for testwriter2');
+SELECT assert_result_count('{testwriter3}', NULL, 2, 'Wrong number of grid rows left after clean - for testwriter3');
+
+SELECT assert_result_count('{testwriter1}', 'today 00:00:00', 0, 'Wrong number of grid rows left after clean - for testwriter1');
+SELECT assert_result_count('{testwriter1}', 'today 00:01:00', 1, 'Wrong number of grid rows left after clean - for testwriter1');
+SELECT assert_result_count('{testwriter1}', 'today 00:02:00', 1, 'Wrong number of grid rows left after clean - for testwriter1');
+
+
+--ROLLBACK TO SAVEPOINT setup_complete;
+
+ROLLBACK;
+'''
+
+
+name = 'remove_old_referencetimes'
+
+def _get_psql_invocation(args, detect_errors=True):
+    ret = ['psql']
+    if detect_errors:
+        ret += ['-v', 'ON_ERROR_STOP=true']
+    if args.database:
+        ret.append(args.database)
+    if args.host:
+        ret += ['-h', args.host]
+    if args.port:
+        ret += ['-p', args.port]
+    if args.user:
+        ret += ['-U', args.user]
+    return ret
+
+def _run_sql_command(cmd, args):
+    cmd = _get_psql_invocation(args) + ['-c', cmd]
+    return subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
+
+def install(args):
+    return _run_sql_command(install_sql, args).returncode
+
+def uninstall(args):
+    return _run_sql_command('delete from clean.strategies where function=$$' + name + '$$', args).returncode
+    
+def purge(args):
+    uninstall(args)
+    return _run_sql_command('drop function clean.remove_old_referencetimes()', args).returncode
+
+def test(args):
+    result = _run_sql_command(test_sql, args)
+    failed = 'ERROR' in result.stderr
+    if failed:
+        print(result.stderr)
+    return failed
+
+
+if __name__ == '__main__':
+    
+    actions = {'install': install,
+               'uninstall': uninstall,
+               'purge': purge,
+               'test': test}
+    
+    parser = argparse.ArgumentParser(conflict_handler='resolve')
+    parser.add_argument('-d', '--database', help='Database name')
+    parser.add_argument('-h', '--host', help='Database host')
+    parser.add_argument('-p', '--port', help='Database port')
+    parser.add_argument('-U', '--user', help='Database user')
+    parser.add_argument('--psql', default='psql', help='Specify location of psql program')
+    parser.add_argument('action', help='One of ' + str(list(actions.keys())))
+    args = parser.parse_args()
+    
+    try:
+        action = actions[args.action]
+    except KeyError:
+        print(args.action + ' is not a valid action', file=sys.stderr)
+        sys.exit(1)
+        
+    sys.exit(action(args))
