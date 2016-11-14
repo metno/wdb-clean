@@ -1,0 +1,16 @@
+Source: wdb-clean-keep-last-referencetimes
+Section: unknown
+Priority: optional
+Maintainer: Vegard Bønes <vegardb@unknown>
+Build-Depends: debhelper (>=9)
+Standards-Version: 3.9.6
+Homepage: <insert the upstream URL, if relevant>
+#Vcs-Git: git://anonscm.debian.org/collab-maint/wdb-clean-keep-last-referencetimes.git
+#Vcs-Browser: https://anonscm.debian.org/cgit/collab-maint/wdb-clean-keep-last-referencetimes.git
+
+Package: wdb-clean-keep-last-referencetimes
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}, python3, wdb
+Description: A cleaner for wdb - keeping only last 2 referencetimes per dataprovider 
+ Installing this package will add and install a cleaning stargtegy in your wdb 
+ installation.
